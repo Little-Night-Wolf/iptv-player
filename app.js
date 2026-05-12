@@ -7,29 +7,10 @@
 // ══════════════════════════════════════════════
 const Storage = {
   KEY: 'iptv_playlists_v2',
-
-  load() {
-    try { return JSON.parse(localStorage.getItem(this.KEY) || '[]'); }
-    catch { return []; }
-  },
-
-  save(playlists) {
-    localStorage.setItem(this.KEY, JSON.stringify(playlists));
-  },
-
-  add(playlist) {
-    const list = this.load();
-    list.push(playlist);
-    this.save(list);
-  },
-
-  remove(id) {
-    this.save(this.load().filter(p => p.id !== id));
-  },
-
-  update(id, data) {
-    this.save(this.load().map(p => p.id === id ? { ...p, ...data } : p));
-  }
+  load()          { try { return JSON.parse(localStorage.getItem(this.KEY) || '[]'); } catch { return []; } },
+  save(list)      { localStorage.setItem(this.KEY, JSON.stringify(list)); },
+  add(playlist)   { const l = this.load(); l.push(playlist); this.save(l); },
+  remove(id)      { this.save(this.load().filter(p => p.id !== id)); },
 };
 
 // ══════════════════════════════════════════════
@@ -41,242 +22,235 @@ const Parser = {
     const channels = [];
     let meta = null;
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
+    for (const raw of lines) {
+      const line = raw.trim();
       if (!line) continue;
-
       if (line.startsWith('#EXTINF')) {
         meta = this._parseMeta(line);
       } else if (!line.startsWith('#') && line.length > 3) {
-        const url = line;
-        const ch = {
-          id: uid(),
-          name: (meta && meta.name) || 'Unknown',
-          logo: (meta && meta.logo) || '',
-          group: (meta && meta.group) || 'General',
-          tvgId: (meta && meta.tvgId) || '',
-          url,
-          isRadio: this._isRadio(url, (meta && meta.group) || '', (meta && meta.name) || '')
-        };
-        channels.push(ch);
+        channels.push({
+          id:      uid(),
+          name:    meta?.name  || 'Unknown',
+          logo:    meta?.logo  || '',
+          group:   meta?.group || 'General',
+          tvgId:   meta?.tvgId || '',
+          url:     line,
+          isRadio: this._isRadio(line, meta?.group || '', meta?.name || ''),
+        });
         meta = null;
       }
     }
-
     return channels;
   },
 
   _parseMeta(line) {
-    const get = (attr) => {
-      const re = new RegExp(`${attr}="([^"]*)"`, 'i');
-      const m = re.exec(line);
-      return m ? m[1].trim() : '';
-    };
-
+    const get = attr => { const m = new RegExp(`${attr}="([^"]*)"`, 'i').exec(line); return m ? m[1].trim() : ''; };
     let name = get('tvg-name');
-    const commaIdx = line.lastIndexOf(',');
-    if (commaIdx !== -1) {
-      const afterComma = line.slice(commaIdx + 1).trim();
-      if (afterComma) name = afterComma;
-    }
-
-    return {
-      name: name || 'Unknown',
-      logo: get('tvg-logo'),
-      group: get('group-title') || 'General',
-      tvgId: get('tvg-id')
-    };
+    const ci = line.lastIndexOf(',');
+    if (ci !== -1) { const s = line.slice(ci + 1).trim(); if (s) name = s; }
+    return { name: name || 'Unknown', logo: get('tvg-logo'), group: get('group-title') || 'General', tvgId: get('tvg-id') };
   },
 
   _isRadio(url, group, name) {
-    const gl = group.toLowerCase();
-    const nl = name.toLowerCase();
-    const ul = url.toLowerCase();
+    const gl = group.toLowerCase(), nl = name.toLowerCase(), ul = url.toLowerCase();
     return gl.includes('radio') || gl.includes('music') ||
-           nl.includes('radio') || nl.includes('fm ') || nl.includes(' fm') ||
+           nl.includes('radio') || /\bfm\b/.test(nl) ||
            ul.endsWith('.mp3') || ul.endsWith('.aac') || ul.endsWith('.ogg');
-  }
+  },
+
+  // Group channels with same name → multi-source
+  deduplicate(channels) {
+    const map = new Map();
+    for (const ch of channels) {
+      const key = ch.name.toLowerCase().trim().replace(/\s+/g, ' ');
+      if (!map.has(key)) {
+        map.set(key, { ...ch, sources: [{ label: 'Source 1', url: ch.url }] });
+      } else {
+        const ex = map.get(key);
+        ex.sources.push({ label: `Source ${ex.sources.length + 1}`, url: ch.url });
+      }
+    }
+    return Array.from(map.values());
+  },
 };
 
 // ══════════════════════════════════════════════
 //  PLAYER
 // ══════════════════════════════════════════════
 const Player = {
-  hls: null,
+  hls:            null,
   currentChannel: null,
-  isPlaying: false,
-  isRadio: false,
+  currentUrl:     null,
+  isPlaying:      false,
+  isRadio:        false,
+  isMuted:        false,
+  volume:         0.9,
+  controlsTimer:  null,
 
-  video: null,   // hls-video element
-  audio: null,   // audio element
+  video:   null,
+  audio:   null,
+  videoCol: null,
 
   init() {
-    this.video = document.getElementById('hls-video');
-    this.audio = document.getElementById('audio-el');
+    this.video    = document.getElementById('main-video');
+    this.audio    = document.getElementById('audio-el');
+    this.videoCol = document.getElementById('video-col');
 
-    this.video.addEventListener('playing', () => this._onPlaying());
-    this.video.addEventListener('waiting', () => this._onWaiting());
-    this.video.addEventListener('pause', () => this._onPause());
-    this.video.addEventListener('error', () => this._onError());
+    // Click on video area → toggle controls visibility
+    this.video.addEventListener('click', () => this._toggleControls());
 
-    this.audio.addEventListener('playing', () => this._onPlaying());
-    this.audio.addEventListener('waiting', () => this._onWaiting());
-    this.audio.addEventListener('pause', () => this._onPause());
-    this.audio.addEventListener('error', () => this._onError());
+    const ev = (el, evts, fn) => evts.forEach(e => el.addEventListener(e, fn));
+    ev(this.video, ['playing'],  () => this._onPlaying());
+    ev(this.video, ['waiting'],  () => this._onWaiting());
+    ev(this.video, ['pause'],    () => this._onPause());
+    ev(this.video, ['error'],    () => this._onError());
+    ev(this.audio, ['playing'],  () => this._onPlayingRadio());
+    ev(this.audio, ['waiting'],  () => {});
+    ev(this.audio, ['pause'],    () => this._onPauseRadio());
+    ev(this.audio, ['error'],    () => this._onError());
   },
 
-  play(channel) {
+  play(channel, url) {
     this.currentChannel = channel;
     this.isRadio = channel.isRadio;
+    this.currentUrl = url || channel.url;
     this._destroyHls();
 
-    if (channel.isRadio) {
-      this.video.pause();
-      this.audio.src = channel.url;
-      this.audio.volume = UI.getVolume();
-      this.audio.play().catch(() => {});
+    if (this.isRadio) {
+      this._stopVideo();
+      this._playAudio(this.currentUrl);
+      UI.showRadioBar(channel);
+      UI.hideVideoPanel();
     } else {
-      this.audio.pause();
-      this._loadHls(channel.url);
+      this._stopAudio();
+      this._loadVideo(this.currentUrl);
+      UI.showVideoPanel(channel);
+      UI.hideRadioBar();
     }
-
-    UI.showPlayerBar(channel);
-    UI.setSpinner(true);
+    UI.renderChannels(); // highlight active
   },
 
-  _loadHls(url) {
-    const video = this.video;
-    video.volume = UI.getVolume();
+  _playAudio(url) {
+    this.audio.src = url;
+    this.audio.volume = this.volume;
+    this.audio.muted = this.isMuted;
+    this.audio.play().catch(() => {});
+  },
+
+  _stopAudio() {
+    this.audio.pause();
+    this.audio.src = '';
+  },
+
+  _stopVideo() {
+    this._destroyHls();
+    this.video.pause();
+    this.video.src = '';
+  },
+
+  _loadVideo(url) {
+    this.video.volume = this.volume;
+    this.video.muted  = this.isMuted;
+    UI.setSpinner(true);
 
     if (Hls.isSupported()) {
-      this.hls = new Hls({
-        enableWorker: true,
-        lowLatencyMode: true,
-        backBufferLength: 90
-      });
+      this.hls = new Hls({ enableWorker: true, lowLatencyMode: true, backBufferLength: 60 });
       this.hls.loadSource(url);
-      this.hls.attachMedia(video);
-      this.hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        video.play().catch(() => {});
-      });
-      this.hls.on(Hls.Events.ERROR, (_, data) => {
-        if (data.fatal) this._onError();
-      });
-    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = url;
-      video.play().catch(() => {});
+      this.hls.attachMedia(this.video);
+      this.hls.on(Hls.Events.MANIFEST_PARSED, () => this.video.play().catch(() => {}));
+      this.hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) this._onError(); });
+    } else if (this.video.canPlayType('application/vnd.apple.mpegurl')) {
+      this.video.src = url;
+      this.video.play().catch(() => {});
     } else {
       showToast('HLS not supported in this browser');
+      UI.setSpinner(false);
     }
   },
 
   togglePlay() {
     if (!this.currentChannel) return;
-    const el = this.isRadio ? this.audio : this.video;
-
-    if (this.isPlaying) {
-      el.pause();
-    } else {
-      // Reconnect to live on resume
-      if (this.isRadio) {
-        this.audio.src = this.currentChannel.url;
-        this.audio.play().catch(() => {});
-      } else if (this.hls) {
-        this.hls.loadSource(this.currentChannel.url);
-        this.video.play().catch(() => {});
+    if (this.isRadio) {
+      if (this.isPlaying) {
+        this.audio.pause();
       } else {
+        // Reconnect to live
+        this.audio.src = this.currentUrl;
+        this.audio.play().catch(() => {});
+      }
+    } else {
+      if (this.isPlaying) {
+        this.video.pause();
+      } else {
+        // Reconnect to live
+        if (this.hls) { this.hls.loadSource(this.currentUrl); }
         this.video.play().catch(() => {});
       }
     }
   },
 
   setVolume(v) {
+    this.volume = v;
     this.video.volume = v;
     this.audio.volume = v;
   },
 
   setMuted(m) {
+    this.isMuted = m;
     this.video.muted = m;
     this.audio.muted = m;
   },
 
-  stop() {
-    this._destroyHls();
-    this.video.pause();
-    this.video.src = '';
-    this.audio.pause();
-    this.audio.src = '';
-    this.currentChannel = null;
-    this.isPlaying = false;
-    UI.hidePlayerBar();
-    UI.renderChannels();
-  },
-
-  enterFullscreen() {
-    if (!this.currentChannel || this.isRadio) return;
-
-    const overlay = document.getElementById('video-overlay');
-    const overlayVideo = document.getElementById('overlay-video');
-    const nameEl = document.getElementById('overlay-ch-name');
-
-    nameEl.textContent = this.currentChannel.name;
-    overlay.classList.add('visible');
-
-    // Reattach HLS to overlay video
-    if (this.hls) {
-      this.hls.detachMedia();
-      this.hls.attachMedia(overlayVideo);
-      overlayVideo.play().catch(() => {});
+  switchSource(url) {
+    this.currentUrl = url;
+    if (this.isRadio) {
+      this._stopAudio();
+      this._playAudio(url);
     } else {
-      overlayVideo.src = this.currentChannel.url;
-      overlayVideo.play().catch(() => {});
+      this._stopVideo();
+      this._loadVideo(url);
     }
   },
 
-  exitFullscreen() {
-    const overlay = document.getElementById('video-overlay');
-    const overlayVideo = document.getElementById('overlay-video');
-    overlay.classList.remove('visible');
+  stop() {
+    this._destroyHls();
+    this._stopVideo();
+    this._stopAudio();
+    this.currentChannel = null;
+    this.currentUrl = null;
+    this.isPlaying = false;
+    UI.hideVideoPanel();
+    UI.hideRadioBar();
+    UI.renderChannels();
+  },
 
-    overlayVideo.pause();
-    overlayVideo.src = '';
-
-    // Re-attach HLS to bar video
-    if (this.hls && this.currentChannel && !this.isRadio) {
-      this.hls.detachMedia();
-      this.hls.attachMedia(this.video);
-      this.video.play().catch(() => {});
+  requestFullscreen() {
+    const el = this.videoCol;
+    if (!el) return;
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    } else {
+      el.requestFullscreen().catch(() => {});
     }
   },
 
   _destroyHls() {
-    if (this.hls) {
-      this.hls.destroy();
-      this.hls = null;
-    }
+    if (this.hls) { this.hls.destroy(); this.hls = null; }
   },
 
-  _onPlaying() {
-    this.isPlaying = true;
-    UI.setSpinner(false);
-    UI.setPlayState(true);
+  _toggleControls() {
+    const el = document.getElementById('vcontrols');
+    el.classList.add('show');
+    clearTimeout(this.controlsTimer);
+    this.controlsTimer = setTimeout(() => el.classList.remove('show'), 3000);
   },
 
-  _onWaiting() {
-    UI.setSpinner(true);
-  },
-
-  _onPause() {
-    this.isPlaying = false;
-    UI.setPlayState(false);
-  },
-
-  _onError() {
-    UI.setSpinner(false);
-    showToast('Stream error – try again');
-    this.isPlaying = false;
-    UI.setPlayState(false);
-  }
+  _onPlaying()      { this.isPlaying = true;  UI.setSpinner(false); UI.setVideoPlayState(true);  },
+  _onWaiting()      { UI.setSpinner(true); },
+  _onPause()        { this.isPlaying = false;  UI.setVideoPlayState(false); },
+  _onPlayingRadio() { this.isPlaying = true;  UI.setRadioPlayState(true);  },
+  _onPauseRadio()   { this.isPlaying = false;  UI.setRadioPlayState(false); },
+  _onError()        { UI.setSpinner(false); showToast('Stream error – try another source'); this.isPlaying = false; UI.setVideoPlayState(false); UI.setRadioPlayState(false); },
 };
 
 // ══════════════════════════════════════════════
@@ -286,38 +260,34 @@ const UI = {
   activePlaylistId: 'all',
   searchQuery: '',
   activeGroup: '',
-  volValue: 0.9,
+  dedupEnabled: false,
 
   init() {
     this._bindHeader();
-    this._bindPlayerBar();
-    this._bindModal();
+    this._bindVideoControls();
+    this._bindRadioBar();
     this._bindSidebar();
     this._bindKeyboard();
     this.renderAll();
   },
 
   // ── DATA ──
-  getPlaylists() { return Storage.load(); },
-
-  getAllChannels() {
-    return this.getPlaylists().flatMap(p => p.channels || []);
-  },
+  getPlaylists()     { return Storage.load(); },
+  getAllChannels()    { return this.getPlaylists().flatMap(p => p.channels || []); },
 
   getVisibleChannels() {
     let ch = this.activePlaylistId === 'all'
       ? this.getAllChannels()
       : (this.getPlaylists().find(p => p.id === this.activePlaylistId)?.channels || []);
 
-    if (this.activeGroup) ch = ch.filter(c => c.group === this.activeGroup);
+    if (this.dedupEnabled) ch = Parser.deduplicate(ch);
+    if (this.activeGroup)  ch = ch.filter(c => c.group === this.activeGroup);
     if (this.searchQuery) {
       const q = this.searchQuery.toLowerCase();
       ch = ch.filter(c => c.name.toLowerCase().includes(q) || c.group.toLowerCase().includes(q));
     }
     return ch;
   },
-
-  getVolume() { return this.volValue; },
 
   // ── RENDER ──
   renderAll() {
@@ -328,9 +298,7 @@ const UI = {
 
   renderSidebar() {
     const playlists = this.getPlaylists();
-    const total = this.getAllChannels().length;
-    document.getElementById('all-count').textContent = total;
-
+    document.getElementById('all-count').textContent = this.getAllChannels().length;
     const list = document.getElementById('playlist-list');
     list.innerHTML = '';
 
@@ -346,13 +314,11 @@ const UI = {
           <line x1="3" y1="18" x2="3.01" y2="18"/>
         </svg>
         <span class="pi-name" title="${esc(p.name)}">${esc(p.name)}</span>
-        <span class="pi-count">${(p.channels || []).length}</span>
-        <button class="playlist-del" data-id="${p.id}" title="Remove playlist">&times;</button>
-      `;
+        <span class="pi-count">${(p.channels||[]).length}</span>
+        <button class="playlist-del" data-id="${p.id}">&times;</button>`;
       list.appendChild(div);
     });
 
-    // Update "all" active state
     document.querySelectorAll('.sidebar-all .playlist-item').forEach(el => {
       el.classList.toggle('active', this.activePlaylistId === 'all');
     });
@@ -365,159 +331,227 @@ const UI = {
 
     const groups = [...new Set(channels.map(c => c.group).filter(Boolean))].sort();
     const sel = document.getElementById('group-filter');
-    const current = sel.value;
+    const cur = sel.value;
     sel.innerHTML = '<option value="">All categories</option>';
     groups.forEach(g => {
-      const opt = document.createElement('option');
-      opt.value = g;
-      opt.textContent = g;
-      if (g === current) opt.selected = true;
-      sel.appendChild(opt);
+      const o = document.createElement('option');
+      o.value = g; o.textContent = g;
+      if (g === cur) o.selected = true;
+      sel.appendChild(o);
     });
     if (!groups.includes(this.activeGroup)) this.activeGroup = '';
   },
 
   renderChannels() {
-    const grid = document.getElementById('channels-grid');
+    const grid     = document.getElementById('channels-grid');
     const channels = this.getVisibleChannels();
-    const playingId = Player.currentChannel?.id;
+    const playId   = Player.currentChannel?.id;
 
     if (channels.length === 0) {
-      const hasPlaylists = this.getPlaylists().length > 0;
+      const has = this.getPlaylists().length > 0;
       grid.innerHTML = `
         <div class="empty-state">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <rect x="2" y="7" width="20" height="15" rx="2"/>
-            <path d="M17 2H7l-1 5h12l-1-5z"/>
+          <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+            <rect x="2" y="7" width="20" height="15" rx="2"/><path d="M17 2H7l-1 5h12l-1-5z"/>
           </svg>
-          <h3>${hasPlaylists ? 'No channels match' : 'No playlists yet'}</h3>
-          <p>${hasPlaylists ? 'Try a different search or filter.' : 'Click <strong>Add Playlist</strong> to get started.'}</p>
+          <h3>${has ? 'No channels match' : 'No playlists yet'}</h3>
+          <p>${has ? 'Try a different search or filter.' : 'Click <strong>Add Playlist</strong> to get started.'}</p>
         </div>`;
       return;
     }
 
     grid.innerHTML = '';
     channels.forEach(ch => {
+      const isPlaying = ch.id === playId;
       const card = document.createElement('div');
-      card.className = 'channel-card' + (ch.id === playingId ? ' playing' : '');
-      card.dataset.id = ch.id;
+      card.className = 'channel-card' + (isPlaying ? ' playing' : '');
 
-      const logo = ch.logo
-        ? `<img class="ch-logo" src="${esc(ch.logo)}" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">`
-          + `<div class="ch-logo-placeholder" style="display:none">${ch.name.charAt(0).toUpperCase()}</div>`
-        : `<div class="ch-logo-placeholder">${ch.name.charAt(0).toUpperCase()}</div>`;
+      const hasSources = ch.sources && ch.sources.length > 1;
+      const logoHtml = ch.logo
+        ? `<div class="ch-logo-wrap"><img class="ch-logo" src="${esc(ch.logo)}" alt="" onerror="this.parentElement.innerHTML='<div class=ch-logo-placeholder>${esc(ch.name.charAt(0).toUpperCase())}</div>'"></div>`
+        : `<div class="ch-logo-wrap"><div class="ch-logo-placeholder">${esc(ch.name.charAt(0).toUpperCase())}</div></div>`;
 
       card.innerHTML = `
-        ${ch.id === playingId ? '<div class="ch-playing-badge"></div>' : ''}
-        ${logo}
+        ${isPlaying ? '<div class="ch-playing-badge"></div>' : ''}
+        ${logoHtml}
         <div class="ch-name">${esc(ch.name)}</div>
-        <div class="ch-group">${esc(ch.group)}</div>
-      `;
+        <div class="ch-meta">
+          <div class="ch-group">${esc(ch.group)}</div>
+          ${hasSources ? `<div class="ch-sources-badge">${ch.sources.length} sources</div>` : ''}
+        </div>`;
 
-      card.addEventListener('click', () => this.playChannel(ch));
+      card.addEventListener('click', () => this._playChannel(ch));
       grid.appendChild(card);
     });
   },
 
-  playChannel(ch) {
-    Player.play(ch);
-    this.renderChannels();
+  _playChannel(ch) {
+    Player.play(ch, ch.url);
   },
 
-  // ── PLAYER BAR ──
-  showPlayerBar(channel) {
-    const bar = document.getElementById('player-bar');
-    bar.classList.add('visible');
+  // ── VIDEO PANEL ──
+  showVideoPanel(channel) {
+    document.getElementById('video-col').classList.add('visible');
+    document.getElementById('channel-col').classList.add('with-video');
 
-    document.getElementById('player-name').textContent = channel.name;
-    document.getElementById('player-group').textContent = channel.group;
+    // Populate controls
+    document.getElementById('vc-name').textContent  = channel.name;
+    document.getElementById('vc-group').textContent = channel.group;
+    this._setLogo(channel, 'vc-logo', 'vc-logo-ph');
+    this._populateSources(channel, 'vc-source-wrap', 'vc-source-select', false);
+  },
 
-    const ph = document.getElementById('player-logo-ph');
-    const img = document.getElementById('player-logo');
+  hideVideoPanel() {
+    document.getElementById('video-col').classList.remove('visible');
+    document.getElementById('channel-col').classList.remove('with-video');
+  },
 
+  // ── RADIO BAR ──
+  showRadioBar(channel) {
+    document.getElementById('radio-bar').classList.add('visible');
+    document.getElementById('rbar-name').textContent  = channel.name;
+    document.getElementById('rbar-group').textContent = channel.group;
+    this._setLogo(channel, 'rbar-logo', 'rbar-logo-ph');
+    this._populateSources(channel, 'rbar-source-wrap', 'rbar-source-select', true);
+  },
+
+  hideRadioBar() {
+    document.getElementById('radio-bar').classList.remove('visible');
+  },
+
+  _setLogo(channel, imgId, phId) {
+    const img = document.getElementById(imgId);
+    const ph  = document.getElementById(phId);
+    ph.textContent = channel.name.charAt(0).toUpperCase();
     if (channel.logo) {
       img.src = channel.logo;
       img.style.display = '';
+      ph.style.display  = 'none';
       img.onerror = () => { img.style.display = 'none'; ph.style.display = ''; };
-      ph.style.display = 'none';
-      ph.textContent = channel.name.charAt(0).toUpperCase();
     } else {
       img.style.display = 'none';
-      ph.style.display = '';
-      ph.textContent = channel.name.charAt(0).toUpperCase();
+      ph.style.display  = '';
     }
-
-    const radioViz = document.getElementById('radio-viz');
-    radioViz.style.display = channel.isRadio ? 'flex' : 'none';
-
-    const fsBtn = document.getElementById('fullscreen-btn');
-    fsBtn.style.display = channel.isRadio ? 'none' : '';
   },
 
-  hidePlayerBar() {
-    document.getElementById('player-bar').classList.remove('visible');
-    document.getElementById('video-overlay').classList.remove('visible');
+  _populateSources(channel, wrapId, selId, isRadio) {
+    const wrap = document.getElementById(wrapId);
+    const sel  = document.getElementById(selId);
+    const sources = channel.sources;
+
+    if (sources && sources.length > 1) {
+      wrap.style.display = 'flex';
+      sel.innerHTML = '';
+      sources.forEach((s, i) => {
+        const o = document.createElement('option');
+        o.value = s.url;
+        o.textContent = s.label || `Source ${i + 1}`;
+        sel.appendChild(o);
+      });
+      sel.value = channel.url;
+      sel.onchange = () => Player.switchSource(sel.value);
+    } else {
+      wrap.style.display = 'none';
+    }
   },
 
   setSpinner(v) {
-    document.getElementById('player-spinner').style.display = v ? '' : 'none';
+    document.getElementById('vc-spinner').style.display = v ? '' : 'none';
   },
 
-  setPlayState(playing) {
-    document.getElementById('icon-play').style.display = playing ? 'none' : '';
-    document.getElementById('icon-pause').style.display = playing ? '' : 'none';
-    const viz = document.getElementById('radio-viz');
-    viz.classList.toggle('paused', !playing);
+  setVideoPlayState(playing) {
+    document.getElementById('vc-icon-play').style.display  = playing ? 'none' : '';
+    document.getElementById('vc-icon-pause').style.display = playing ? ''     : 'none';
   },
 
-  // ── BINDINGS ──
+  setRadioPlayState(playing) {
+    document.getElementById('r-icon-play').style.display  = playing ? 'none' : '';
+    document.getElementById('r-icon-pause').style.display = playing ? ''     : 'none';
+    document.getElementById('radio-viz').classList.toggle('paused', !playing);
+  },
+
+  // ── BIND ──
   _bindHeader() {
     document.getElementById('search').addEventListener('input', e => {
       this.searchQuery = e.target.value.trim();
       this.renderChannels();
     });
-
     document.getElementById('group-filter').addEventListener('change', e => {
       this.activeGroup = e.target.value;
       this.renderChannels();
     });
-
-    document.getElementById('btn-add-playlist').addEventListener('click', () => openModal());
+    document.getElementById('dedup-check').addEventListener('change', e => {
+      this.dedupEnabled = e.target.checked;
+      this.renderChannels();
+    });
+    document.getElementById('btn-add-playlist').addEventListener('click', openModal);
   },
 
-  _bindPlayerBar() {
-    document.getElementById('play-pause-btn').addEventListener('click', () => {
-      Player.togglePlay();
+  _bindVideoControls() {
+    document.getElementById('vc-play-btn').addEventListener('click', () => Player.togglePlay());
+
+    document.getElementById('vc-close').addEventListener('click', () => Player.stop());
+
+    document.getElementById('vc-mute-btn').addEventListener('click', () => {
+      Player.setMuted(!Player.isMuted);
+      this._updateMuteIcons();
     });
 
-    document.getElementById('mute-btn').addEventListener('click', () => {
-      const muted = !this.video?.muted;
-      Player.setMuted(muted);
-      document.getElementById('icon-vol').style.display = muted ? 'none' : '';
-      document.getElementById('icon-mute').style.display = muted ? '' : 'none';
+    document.getElementById('vc-vol').addEventListener('input', e => {
+      Player.setVolume(e.target.value / 100);
+      document.getElementById('rbar-vol').value = e.target.value;
     });
 
-    document.getElementById('vol-slider').addEventListener('input', e => {
-      this.volValue = e.target.value / 100;
-      Player.setVolume(this.volValue);
+    document.getElementById('vc-fullscreen-btn').addEventListener('click', () => Player.requestFullscreen());
+
+    document.addEventListener('fullscreenchange', () => {
+      const btn = document.getElementById('vc-fullscreen-btn');
+      btn.innerHTML = document.fullscreenElement
+        ? `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+             <polyline points="4,14 10,14 10,20"/><polyline points="20,10 14,10 14,4"/>
+             <line x1="10" y1="14" x2="3" y2="21"/><line x1="21" y1="3" x2="14" y2="10"/>
+           </svg>`
+        : `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+             <polyline points="15,3 21,3 21,9"/><polyline points="9,21 3,21 3,15"/>
+             <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+           </svg>`;
     });
 
-    document.getElementById('fullscreen-btn').addEventListener('click', () => {
-      Player.enterFullscreen();
+    // Show controls on mouse move over video panel
+    document.getElementById('video-col').addEventListener('mousemove', () => {
+      const el = document.getElementById('vcontrols');
+      el.classList.add('show');
+      clearTimeout(Player.controlsTimer);
+      Player.controlsTimer = setTimeout(() => el.classList.remove('show'), 3000);
+    });
+  },
+
+  _bindRadioBar() {
+    document.getElementById('radio-play-btn').addEventListener('click', () => Player.togglePlay());
+
+    document.getElementById('rbar-close-btn').addEventListener('click', () => Player.stop());
+
+    document.getElementById('rbar-mute-btn').addEventListener('click', () => {
+      Player.setMuted(!Player.isMuted);
+      this._updateMuteIcons();
     });
 
-    document.getElementById('exit-fullscreen-btn').addEventListener('click', () => {
-      Player.exitFullscreen();
+    document.getElementById('rbar-vol').addEventListener('input', e => {
+      Player.setVolume(e.target.value / 100);
+      document.getElementById('vc-vol').value = e.target.value;
     });
+  },
 
-    document.getElementById('close-player-btn').addEventListener('click', () => {
-      Player.stop();
-    });
+  _updateMuteIcons() {
+    const m = Player.isMuted;
+    document.getElementById('vc-icon-vol').style.display   = m ? 'none' : '';
+    document.getElementById('vc-icon-mute').style.display  = m ? ''     : 'none';
+    document.getElementById('r-icon-vol').style.display    = m ? 'none' : '';
+    document.getElementById('r-icon-mute').style.display   = m ? ''     : 'none';
   },
 
   _bindSidebar() {
-    // "All Channels" item
-    document.querySelector('.sidebar-all').addEventListener('click', (e) => {
+    document.querySelector('.sidebar-all').addEventListener('click', e => {
       if (e.target.closest('.playlist-item')) {
         this.activePlaylistId = 'all';
         this.activeGroup = '';
@@ -526,25 +560,20 @@ const UI = {
       }
     });
 
-    // Dynamic playlist items
-    document.getElementById('playlist-list').addEventListener('click', (e) => {
+    document.getElementById('playlist-list').addEventListener('click', e => {
       const del = e.target.closest('.playlist-del');
       if (del) {
         e.stopPropagation();
+        if (!confirm('Remove this playlist?')) return;
         const id = del.dataset.id;
-        if (confirm('Remove this playlist?')) {
-          if (Player.currentChannel) {
-            const ch = this.getPlaylists().find(p => p.id === id)?.channels || [];
-            if (ch.find(c => c.id === Player.currentChannel?.id)) Player.stop();
-          }
-          Storage.remove(id);
-          if (this.activePlaylistId === id) this.activePlaylistId = 'all';
-          this.activeGroup = '';
-          this.renderAll();
-        }
+        const pChs = this.getPlaylists().find(p => p.id === id)?.channels || [];
+        if (pChs.find(c => c.id === Player.currentChannel?.id)) Player.stop();
+        Storage.remove(id);
+        if (this.activePlaylistId === id) this.activePlaylistId = 'all';
+        this.activeGroup = '';
+        this.renderAll();
         return;
       }
-
       const item = e.target.closest('.playlist-item');
       if (item) {
         this.activePlaylistId = item.dataset.id;
@@ -557,40 +586,18 @@ const UI = {
 
   _bindKeyboard() {
     document.addEventListener('keydown', e => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      if (['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)) return;
       if (e.code === 'Space') { e.preventDefault(); Player.togglePlay(); }
-      if (e.code === 'KeyM') {
-        const muted = !(Player.video?.muted);
-        Player.setMuted(muted);
-        document.getElementById('icon-vol').style.display = muted ? 'none' : '';
-        document.getElementById('icon-mute').style.display = muted ? '' : 'none';
-      }
+      if (e.code === 'KeyM')  { Player.setMuted(!Player.isMuted); this._updateMuteIcons(); }
+      if (e.code === 'KeyF' && Player.currentChannel && !Player.isRadio) Player.requestFullscreen();
       if (e.code === 'Escape') {
-        if (document.getElementById('video-overlay').classList.contains('visible')) {
-          Player.exitFullscreen();
-        }
-        if (document.getElementById('modal-overlay').classList.contains('open')) {
-          closeModal();
-        }
+        if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+        else if (document.getElementById('modal-overlay').classList.contains('open')) closeModal();
       }
-      if (e.code === 'ArrowUp') {
-        const v = Math.min(1, this.volValue + 0.1);
-        this.volValue = v;
-        Player.setVolume(v);
-        document.getElementById('vol-slider').value = Math.round(v * 100);
-      }
-      if (e.code === 'ArrowDown') {
-        const v = Math.max(0, this.volValue - 0.1);
-        this.volValue = v;
-        Player.setVolume(v);
-        document.getElementById('vol-slider').value = Math.round(v * 100);
-      }
+      if (e.code === 'ArrowUp')   { const v = Math.min(1, Player.volume + 0.05); Player.setVolume(v); document.getElementById('vc-vol').value = Math.round(v*100); document.getElementById('rbar-vol').value = Math.round(v*100); }
+      if (e.code === 'ArrowDown') { const v = Math.max(0, Player.volume - 0.05); Player.setVolume(v); document.getElementById('vc-vol').value = Math.round(v*100); document.getElementById('rbar-vol').value = Math.round(v*100); }
     });
   },
-
-  _bindModal() {
-    // handled by modal functions below
-  }
 };
 
 // ══════════════════════════════════════════════
@@ -598,84 +605,56 @@ const UI = {
 // ══════════════════════════════════════════════
 let activeTab = 'url';
 
-function openModal() {
-  document.getElementById('modal-overlay').classList.add('open');
-  clearModalError();
-}
-
+function openModal()  { document.getElementById('modal-overlay').classList.add('open'); clearErr(); }
 function closeModal() {
-  document.getElementById('modal-overlay').classList.remove('open');
-  clearModalError();
-  document.getElementById('url-input').value = '';
-  document.getElementById('url-name').value = '';
-  document.getElementById('paste-input').value = '';
-  document.getElementById('paste-name').value = '';
-  document.getElementById('file-name').value = '';
+  document.getElementById('modal-overlay').classList.remove('open'); clearErr();
+  ['url-input','url-name','paste-input','paste-name','file-name'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('file-input').value = '';
 }
-
-function showModalError(msg) {
-  const el = document.getElementById('modal-error');
-  el.textContent = msg;
-  el.classList.add('visible');
-}
-
-function clearModalError() {
-  document.getElementById('modal-error').classList.remove('visible');
-}
-
-function setTab(tab) {
+function showErr(msg) { const e = document.getElementById('modal-error'); e.textContent = msg; e.classList.add('visible'); }
+function clearErr()   { document.getElementById('modal-error').classList.remove('visible'); }
+function setTab(tab)  {
   activeTab = tab;
   document.querySelectorAll('.modal-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
   document.querySelectorAll('.modal-tab-panel').forEach(p => p.classList.toggle('active', p.id === `tab-${tab}`));
 }
 
 async function savePlaylist() {
-  clearModalError();
+  clearErr();
   let name = '', content = '';
 
   if (activeTab === 'url') {
-    name = document.getElementById('url-name').value.trim();
     const url = document.getElementById('url-input').value.trim();
-    if (!url) { showModalError('Please enter a URL.'); return; }
-    if (!name) name = new URL(url).hostname || 'Playlist';
-
+    name = document.getElementById('url-name').value.trim();
+    if (!url) { showErr('Please enter a URL.'); return; }
+    try { if (!name) name = new URL(url).hostname; } catch { name = 'Playlist'; }
     showToast('Fetching playlist…');
     try {
       const res = await fetch(url, { cache: 'no-store' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       content = await res.text();
-    } catch (e) {
-      showModalError(`Could not load URL: ${e.message}. Try Paste or File instead.`);
-      return;
-    }
+    } catch (e) { showErr(`Could not load: ${e.message}. Try Paste or File instead.`); return; }
 
   } else if (activeTab === 'paste') {
-    name = document.getElementById('paste-name').value.trim() || 'Playlist';
+    name    = document.getElementById('paste-name').value.trim() || 'Playlist';
     content = document.getElementById('paste-input').value.trim();
-    if (!content) { showModalError('Please paste M3U content.'); return; }
+    if (!content) { showErr('Please paste M3U content.'); return; }
 
   } else if (activeTab === 'file') {
-    name = document.getElementById('file-name').value.trim();
     const file = document.getElementById('file-input').files[0];
-    if (!file) { showModalError('Please select a file.'); return; }
-    if (!name) name = file.name.replace(/\.(m3u8?|txt)$/i, '');
+    if (!file) { showErr('Please select a file.'); return; }
+    name    = document.getElementById('file-name').value.trim() || file.name.replace(/\.(m3u8?|txt)$/i, '');
     content = await readFile(file);
   }
 
   if (!content.includes('#EXTINF') && !content.includes('#EXTM3U')) {
-    showModalError('This does not look like a valid M3U file.');
-    return;
+    showErr('This does not look like a valid M3U file.'); return;
   }
 
   const channels = Parser.parse(content);
-  if (channels.length === 0) {
-    showModalError('No channels found in this playlist.');
-    return;
-  }
+  if (!channels.length) { showErr('No channels found.'); return; }
 
-  const playlist = { id: uid(), name, channels };
-  Storage.add(playlist);
+  Storage.add({ id: uid(), name, channels });
   closeModal();
   UI.renderAll();
   showToast(`Loaded ${channels.length} channels from "${name}"`);
@@ -683,23 +662,22 @@ async function savePlaylist() {
 
 function readFile(file) {
   return new Promise((res, rej) => {
-    const reader = new FileReader();
-    reader.onload = e => res(e.target.result);
-    reader.onerror = () => rej(new Error('File read error'));
-    reader.readAsText(file);
+    const r = new FileReader();
+    r.onload  = e => res(e.target.result);
+    r.onerror = () => rej(new Error('File read error'));
+    r.readAsText(file);
   });
 }
 
 // ══════════════════════════════════════════════
 //  TOAST
 // ══════════════════════════════════════════════
-let toastTimer = null;
+let _toastTimer;
 function showToast(msg) {
   const el = document.getElementById('toast');
-  el.textContent = msg;
-  el.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+  el.textContent = msg; el.classList.add('show');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
 }
 
 // ══════════════════════════════════════════════
@@ -710,13 +688,8 @@ function uid() {
     ? crypto.randomUUID()
     : Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
-
-function esc(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 // ══════════════════════════════════════════════
@@ -726,7 +699,6 @@ document.addEventListener('DOMContentLoaded', () => {
   Player.init();
   UI.init();
 
-  // Modal events
   document.getElementById('modal-cancel').addEventListener('click', closeModal);
   document.getElementById('modal-save').addEventListener('click', savePlaylist);
   document.getElementById('modal-overlay').addEventListener('click', e => {
