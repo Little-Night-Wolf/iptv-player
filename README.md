@@ -13,13 +13,6 @@ A lightweight static IPTV/Radio player — no server needed. Just open `index.ht
 - Reconnects to live stream on unpause
 - Keyboard shortcuts: `Space` play/pause, `M` mute, `↑↓` volume, `Esc` close
 
-## How to publish on GitHub Pages
-
-1. Create a new GitHub repository
-2. Upload `index.html`, `style.css`, and `app.js`
-3. Go to **Settings → Pages → Source → main branch**
-4. Your player will be live at `https://yourusername.github.io/yourrepo/`
-
 ## Files
 
 | File | Description |
