@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>IPTV Player</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header>
+    <span class="logo">&#9654; IPTV</span>
+
+    <div class="search-wrap">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+      </svg>
+      <input id="search" type="search" placeholder="Search channels..." autocomplete="off" />
+    </div>
+
+    <select id="group-filter">
+      <option value="">All categories</option>
+    </select>
+
+    <div class="header-actions">
+      <button class="btn-primary" id="btn-add-playlist">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M12 5v14M5 12h14"/>
+        </svg>
+        Add Playlist
+      </button>
+    </div>
+  </header>
+
+  <!-- BODY -->
+  <div class="app-body">
+
+    <!-- SIDEBAR -->
+    <aside>
+      <div class="sidebar-header">Playlists</div>
+      <div class="sidebar-all">
+        <div class="playlist-item active" data-id="all">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+            <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
+          </svg>
+          <span class="pi-name">All Channels</span>
+          <span class="pi-count" id="all-count">0</span>
+        </div>
+      </div>
+      <div id="playlist-list"></div>
+    </aside>
+
+    <!-- MAIN -->
+    <main>
+      <div id="channels-grid" class="channels-grid">
+        <div class="empty-state">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="2" y="7" width="20" height="15" rx="2"/>
+            <path d="M17 2H7l-1 5h12l-1-5z"/>
+          </svg>
+          <h3>No playlists yet</h3>
+          <p>Click <strong>Add Playlist</strong> to load an M3U playlist by URL, paste, or file upload.</p>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- PLAYER BAR -->
+  <div id="player-bar">
+    <video id="hls-video" playsinline></video>
+    <audio id="audio-el"></audio>
+
+    <div class="player-ch-info">
+      <div class="player-ch-logo-ph" id="player-logo-ph">TV</div>
+      <img class="player-ch-logo" id="player-logo" src="" alt="" style="display:none" />
+      <div class="player-ch-texts">
+        <div class="player-ch-name" id="player-name">—</div>
+        <div class="player-ch-group" id="player-group">—</div>
+      </div>
+    </div>
+
+    <div class="player-controls">
+      <div class="loading-spinner" id="player-spinner" style="display:none"></div>
+      <button class="play-btn" id="play-pause-btn">
+        <svg id="icon-pause" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="display:none">
+          <rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>
+        </svg>
+        <svg id="icon-play" width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+          <polygon points="5,3 19,12 5,21"/>
+        </svg>
+      </button>
+      <div class="radio-visualizer paused" id="radio-viz" style="display:none">
+        <div class="radio-bar"></div>
+        <div class="radio-bar"></div>
+        <div class="radio-bar"></div>
+        <div class="radio-bar"></div>
+        <div class="radio-bar"></div>
+      </div>
+      <span class="live-badge">LIVE</span>
+    </div>
+
+    <div class="player-right">
+      <div class="vol-wrap">
+        <button class="btn-icon" id="mute-btn" title="Mute">
+          <svg id="icon-vol" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="11,5 6,9 2,9 2,15 6,15 11,19"/>
+            <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+            <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+          </svg>
+          <svg id="icon-mute" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none">
+            <polygon points="11,5 6,9 2,9 2,15 6,15 11,19"/>
+            <line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
+          </svg>
+        </button>
+        <input type="range" id="vol-slider" min="0" max="100" value="90" />
+      </div>
+      <button class="btn-icon" id="fullscreen-btn" title="Fullscreen">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="15,3 21,3 21,9"/><polyline points="9,21 3,21 3,15"/>
+          <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+        </svg>
+      </button>
+      <button class="btn-icon" id="close-player-btn" title="Close player">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- VIDEO FULLSCREEN OVERLAY -->
+  <div id="video-overlay">
+    <video id="overlay-video" playsinline controls style="flex:1;width:100%;background:#000;min-height:0;"></video>
+    <div class="overlay-controls">
+      <span class="overlay-ch-name" id="overlay-ch-name"></span>
+      <span class="live-badge">LIVE</span>
+      <button class="btn-icon" id="exit-fullscreen-btn" title="Exit fullscreen">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="4,14 10,14 10,20"/><polyline points="20,10 14,10 14,4"/>
+          <line x1="10" y1="14" x2="3" y2="21"/><line x1="21" y1="3" x2="14" y2="10"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- ADD PLAYLIST MODAL -->
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal">
+      <h2>Add Playlist</h2>
+
+      <div class="modal-tabs">
+        <button class="modal-tab active" data-tab="url">URL</button>
+        <button class="modal-tab" data-tab="paste">Paste M3U</button>
+        <button class="modal-tab" data-tab="file">File Upload</button>
+      </div>
+
+      <!-- URL Tab -->
+      <div class="modal-tab-panel active" id="tab-url">
+        <label>
+          Playlist name
+          <input type="text" id="url-name" placeholder="My Playlist" />
+        </label>
+        <label>
+          M3U / M3U8 URL
+          <input type="url" id="url-input" placeholder="http://..." />
+        </label>
+        <small style="color:var(--text3);font-size:12px;">
+          Note: Some URLs may be blocked by CORS. Use Paste or File if loading fails.
+        </small>
+      </div>
+
+      <!-- Paste Tab -->
+      <div class="modal-tab-panel" id="tab-paste">
+        <label>
+          Playlist name
+          <input type="text" id="paste-name" placeholder="My Playlist" />
+        </label>
+        <label>
+          M3U content
+          <textarea id="paste-input" rows="8" placeholder="#EXTM3U&#10;#EXTINF:-1 group-title=&quot;News&quot;,Channel Name&#10;http://stream.url/stream.m3u8"></textarea>
+        </label>
+      </div>
+
+      <!-- File Tab -->
+      <div class="modal-tab-panel" id="tab-file">
+        <label>
+          Playlist name
+          <input type="text" id="file-name" placeholder="My Playlist" />
+        </label>
+        <label>
+          Select .m3u or .m3u8 file
+          <input type="file" id="file-input" accept=".m3u,.m3u8,.txt" />
+        </label>
+      </div>
+
+      <div class="error-msg" id="modal-error"></div>
+
+      <div class="modal-footer">
+        <button class="btn-ghost" id="modal-cancel">Cancel</button>
+        <button class="btn-primary" id="modal-save">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17,8 12,3 7,8"/><line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          Load Playlist
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
