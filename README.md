@@ -20,7 +20,7 @@ A lightweight static IPTV/Radio player no server needed. Just open `index.html` 
 | `index.html` | Main HTML structure |
 | `style.css` | Dark theme styles |
 | `app.js` | All player logic (M3U parser, HLS player, localStorage) |
-| `/playlists/index.json` | The list of default playlist to load at page load |
+| `/playlists/index.json` | The list of default playlist to load |
 
 ## Notes
 
