@@ -720,9 +720,13 @@ function esc(s) {
 // ══════════════════════════════════════════════
 //  BOOTSTRAP
 // ══════════════════════════════════════════════
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => { 
   Player.init();
   UI.init();
+
+  // --- NEW PLAYLIST AUTO-LOAD LOGIC ---
+  await autoLoadLocalPlaylists();
+  // ------------------------------------
 
   document.getElementById('modal-cancel').addEventListener('click', closeModal);
   document.getElementById('modal-save').addEventListener('click', savePlaylist);
@@ -733,3 +737,45 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.addEventListener('click', () => setTab(btn.dataset.tab));
   });
 });
+
+// Helper function to automatically load local playlists from /playlists
+async function autoLoadLocalPlaylists() {
+  try {
+    const response = await fetch('playlists/index.json');
+    if (!response.ok) return; // If the JSON doesn't exist, exit quietly
+    
+    const playlistIndex = await response.json();
+    const currentPlaylists = Storage.load();
+
+    for (const item of playlistIndex) {
+      // Prevent duplication if a playlist with the same name already exists
+      const exists = currentPlaylists.some(p => p.name === item.name);
+      if (exists) continue;
+
+      try {
+        const fileResponse = await fetch(item.file);
+        if (!fileResponse.ok) continue;
+        
+        const m3uContent = await fileResponse.text();
+        const channels = Parser.parse(m3uContent);
+
+        if (channels.length > 0) {
+          Storage.add({
+            id: uid(),
+            name: item.name,
+            channels: channels
+          });
+          console.log(`[AutoLoad] Automatically loaded playlist: ${item.name}`);
+        }
+      } catch (err) {
+        console.error(`Error loading m3u file (${item.file}):`, err);
+      }
+    }
+    
+    // Refresh the entire UI so the new playlists and channels appear immediately
+    UI.renderAll();
+    
+  } catch (e) {
+    console.log("No local playlists found to auto-load or the JSON is invalid.");
+  }
+}
