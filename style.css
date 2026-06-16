@@ -1,4 +1,13 @@
+/* Added font for emoji support */
 @import url('https://fonts.googleapis.com/css2?family=Noto+Color+Emoji&display=swap');
+
+/* Prevent using emoji font for normal text */
+@font-face {
+  font-family: "SafeText";
+  src: local("Segoe UI"), local("SF Pro Text"), local("Helvetica Neue"), local("Arial"), local("Ubuntu");
+  unicode-range: U+0000-00FF;
+}
+
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
@@ -22,7 +31,7 @@
 html, body { height: 100%; overflow: hidden; }
 
 body {
-  font-family: 'Noto Color Emoji', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: "SafeText", "Noto Color Emoji", sans-serif;
   background: var(--bg);
   color: var(--text);
   display: flex;
