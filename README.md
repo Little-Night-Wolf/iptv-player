@@ -1,6 +1,6 @@
 # IPTV Player
 
-A lightweight static IPTV/Radio player — no server needed. Just open `index.html` in a browser or publish to GitHub Pages.
+A lightweight static IPTV/Radio player no server needed. Just open `index.html` in a browser or publish to GitHub Pages.
 
 ## Features
 
@@ -20,8 +20,9 @@ A lightweight static IPTV/Radio player — no server needed. Just open `index.ht
 | `index.html` | Main HTML structure |
 | `style.css` | Dark theme styles |
 | `app.js` | All player logic (M3U parser, HLS player, localStorage) |
+| `/playlists/index.json` | The list of default playlist to load at page load |
 
 ## Notes
 
 - Loading playlists from external URLs may fail due to browser CORS restrictions. Use **Paste** or **File Upload** instead when that happens.
-- HLS.js is loaded from CDN — requires internet connection.
+- HLS.js is loaded from CDN.
