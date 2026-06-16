@@ -97,7 +97,10 @@ const Player = {
     this.videoCol = document.getElementById('video-col');
 
     // Click on video area → toggle controls visibility
-    this.video.addEventListener('click', () => this._toggleControls());
+    //this.video.addEventListener('click', () => this._toggleControls());
+    
+    // New hide ui system
+    this.video.addEventListener('click', () => this.wakeControls());
 
     const ev = (el, evts, fn) => evts.forEach(e => el.addEventListener(e, fn));
     ev(this.video, ['playing'],  () => this._onPlaying());
@@ -237,14 +240,30 @@ const Player = {
   _destroyHls() {
     if (this.hls) { this.hls.destroy(); this.hls = null; }
   },
-
+  
+  // New player hide controls system
+  wakeControls() {
+    const el = document.getElementById('vcontrols');
+    if (this.videoCol) this.videoCol.style.cursor = 'default';
+    el.classList.add('show');
+    
+    clearTimeout(this.controlsTimer);
+    this.controlsTimer = setTimeout(() => {
+      el.classList.remove('show');
+      if (this.isPlaying && this.videoCol) {
+        this.videoCol.style.cursor = 'none';
+      }
+    }, 3000);
+  },
+  
+/*
   _toggleControls() {
     const el = document.getElementById('vcontrols');
     el.classList.add('show');
     clearTimeout(this.controlsTimer);
     this.controlsTimer = setTimeout(() => el.classList.remove('show'), 3000);
   },
-
+*/
   _onPlaying()      { this.isPlaying = true;  UI.setSpinner(false); UI.setVideoPlayState(true);  },
   _onWaiting()      { UI.setSpinner(true); },
   _onPause()        { this.isPlaying = false;  UI.setVideoPlayState(false); },
@@ -488,6 +507,9 @@ const UI = {
   },
 
   _bindVideoControls() {
+    document.getElementById('video-col').addEventListener('mousemove', () => {
+    Player.wakeControls();
+  });
     document.getElementById('vc-play-btn').addEventListener('click', () => Player.togglePlay());
 
     document.getElementById('vc-close').addEventListener('click', () => Player.stop());
@@ -586,6 +608,9 @@ const UI = {
 
   _bindKeyboard() {
     document.addEventListener('keydown', e => {
+      
+      Player.wakeControls();
+      
       if (['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)) return;
       if (e.code === 'Space') { e.preventDefault(); Player.togglePlay(); }
       if (e.code === 'KeyM')  { Player.setMuted(!Player.isMuted); this._updateMuteIcons(); }
