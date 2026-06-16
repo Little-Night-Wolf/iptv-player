@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────
-//  IPTV PLAYER  –  static HTML/JS/JSON edition
+//  IPTV PLAYER - static HTML/JS/JSON edition
 // ─────────────────────────────────────────────
 
 // ══════════════════════════════════════════════
@@ -269,7 +269,7 @@ const Player = {
   _onPause()        { this.isPlaying = false;  UI.setVideoPlayState(false); },
   _onPlayingRadio() { this.isPlaying = true;  UI.setRadioPlayState(true);  },
   _onPauseRadio()   { this.isPlaying = false;  UI.setRadioPlayState(false); },
-  _onError()        { UI.setSpinner(false); showToast('Stream error – try another source'); this.isPlaying = false; UI.setVideoPlayState(false); UI.setRadioPlayState(false); },
+  _onError()        { UI.setSpinner(false); showToast('Stream error: Wait or try another source'); this.isPlaying = false; UI.setVideoPlayState(false); UI.setRadioPlayState(false); },
 };
 
 // ══════════════════════════════════════════════
