@@ -356,7 +356,15 @@ aside {
   transition: opacity 0.25s;
   pointer-events: none;
 }
+
+/*
 .vcontrols.show, .video-col:hover .vcontrols {
+  opacity: 1;
+  pointer-events: all;
+}
+*/
+
+.vcontrols.show {
   opacity: 1;
   pointer-events: all;
 }
