@@ -260,7 +260,7 @@ const UI = {
   activePlaylistId: 'all',
   searchQuery: '',
   activeGroup: '',
-  dedupEnabled: false,
+  dedupEnabled: true,
 
   init() {
     this._bindHeader();
